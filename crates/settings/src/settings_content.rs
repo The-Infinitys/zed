@@ -1,4 +1,5 @@
 mod agent;
+mod background_image;
 mod editor;
 mod extension;
 mod language;
@@ -7,8 +8,8 @@ mod project;
 mod terminal;
 mod theme;
 mod workspace;
-
 pub use agent::*;
+pub use background_image::*;
 pub use editor::*;
 pub use extension::*;
 pub use language::*;
@@ -163,6 +164,9 @@ pub struct SettingsContent {
 
     /// Settings related to Vim mode in Zed.
     pub vim: Option<VimSettingsContent>,
+
+    /// Editor's background image
+    pub background_image: Option<BackgroundImageSettingsContent>,
 }
 
 impl SettingsContent {
