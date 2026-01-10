@@ -164,9 +164,6 @@ pub struct SettingsContent {
 
     /// Settings related to Vim mode in Zed.
     pub vim: Option<VimSettingsContent>,
-
-    /// Editor's background image
-    pub background_image: Option<BackgroundImageSettingsContent>,
 }
 
 impl SettingsContent {

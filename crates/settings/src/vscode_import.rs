@@ -832,6 +832,7 @@ impl VsCodeSettings {
                 "onWindowChange" => Some(AutosaveSetting::OnWindowChange),
                 _ => None,
             }),
+            background_image: None,
             bottom_dock_layout: None,
             centered_layout: None,
             close_on_file_delete: None,

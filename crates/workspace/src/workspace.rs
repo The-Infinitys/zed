@@ -45,10 +45,11 @@ use futures::{
 use gpui::{
     Action, AnyEntity, AnyView, AnyWeakView, App, AsyncApp, AsyncWindowContext, Bounds, Context,
     CursorStyle, Decorations, DragMoveEvent, Entity, EntityId, EventEmitter, FocusHandle,
-    Focusable, Global, HitboxBehavior, Hsla, KeyContext, Keystroke, ManagedView, MouseButton,
-    PathPromptOptions, Point, PromptLevel, Render, ResizeEdge, Size, Stateful, Subscription,
-    SystemWindowTabController, Task, Tiling, WeakEntity, WindowBounds, WindowHandle, WindowId,
-    WindowOptions, actions, canvas, point, relative, size, transparent_black,
+    Focusable, Global, HitboxBehavior, Hsla, ImageSource, KeyContext, Keystroke, ManagedView,
+    MouseButton, ObjectFit, PathPromptOptions, Point, PromptLevel, Render, ResizeEdge, Resource,
+    Size, Stateful, Subscription, SystemWindowTabController, Task, Tiling, WeakEntity,
+    WindowBounds, WindowHandle, WindowId, WindowOptions, actions, canvas, img, point, relative,
+    size, transparent_black,
 };
 pub use history_manager::*;
 pub use item::{
@@ -90,7 +91,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use session::AppSession;
 use settings::{
-    CenteredPaddingSettings, Settings, SettingsLocation, SettingsStore, update_settings_file,
+    BackgroundImage, CenteredPaddingSettings, Settings, SettingsLocation, SettingsStore,
+    update_settings_file,
 };
 use shared_screen::SharedScreen;
 use sqlez::{
@@ -6941,12 +6943,26 @@ impl Render for Workspace {
             .map(|(_, notification)| notification.entity_id())
             .collect::<Vec<_>>();
         let bottom_dock_layout = WorkspaceSettings::get_global(cx).bottom_dock_layout;
-
+        let background_image = WorkspaceSettings::get_global(cx).background_image.clone();
         client_side_decorations(
             self.actions(div(), window, cx)
                 .key_context(context)
                 .relative()
                 .size_full()
+                .bg(colors.background)
+                .when_some(background_image.path, |this,path| {
+                    this.child(
+                        img(
+                            ImageSource::Resource(Resource::from(PathBuf::from(path)))
+                        ).size_full()
+                        .absolute()
+                        .object_fit(ObjectFit::Cover)
+                        .opacity(
+                            background_image.opacity.unwrap_or(
+                                BackgroundImage::default().opacity.unwrap()
+                            )
+                        ))
+                })
                 .flex()
                 .flex_col()
                 .font(ui_font)
@@ -6971,7 +6987,6 @@ impl Render for Workspace {
                         .child(
                             div()
                                 .id("workspace")
-                                .bg(colors.background)
                                 .relative()
                                 .flex_1()
                                 .w_full()
@@ -7408,7 +7423,6 @@ impl Render for Workspace {
                                         .absolute()
                                         .overflow_hidden()
                                         .border_color(colors.border)
-                                        .bg(colors.background)
                                         .child(zoomed_view)
                                         .inset_0()
                                         .shadow_lg();

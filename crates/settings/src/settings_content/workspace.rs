@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use settings_macros::{MergeFrom, with_fallible_options};
 
 use crate::{
-    CenteredPaddingSettings, DelayMs, DockPosition, DockSide, InactiveOpacity,
+    BackgroundImage, CenteredPaddingSettings, DelayMs, DockPosition, DockSide, InactiveOpacity,
     ScrollbarSettingsContent, ShowIndentGuides, serialize_optional_f32_with_two_decimal_places,
 };
 
@@ -116,6 +116,8 @@ pub struct WorkspaceSettingsContent {
     /// What draws window decorations/titlebar, the client application (Zed) or display server
     /// Default: client
     pub window_decorations: Option<WindowDecorations>,
+    /// Background image settings
+    pub background_image: Option<BackgroundImage>,
 }
 
 #[with_fallible_options]

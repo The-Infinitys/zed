@@ -11,3 +11,17 @@ pub struct BackgroundImageSettingsContent {
     /// Opacity of the background image.
     pub opacity: Option<f32>,
 }
+
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, JsonSchema, MergeFrom)]
+pub struct BackgroundImage {
+    pub path: Option<String>,
+    pub opacity: Option<f32>,
+}
+impl Default for BackgroundImage {
+    fn default() -> Self {
+        BackgroundImage {
+            path: None,
+            opacity: Some(0.5),
+        }
+    }
+}
