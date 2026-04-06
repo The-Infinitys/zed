@@ -6,9 +6,8 @@ use serde::{Deserialize, Serialize};
 use settings_macros::{MergeFrom, with_fallible_options};
 
 use crate::{
-    CenteredPaddingSettings, DelayMs, DockPosition, DockSide, InactiveOpacity, ShowIndentGuides,
-    BackgroundImage,
-    ShowScrollbar, serialize_optional_f32_with_two_decimal_places,
+    BackgroundImage, CenteredPaddingSettings, DelayMs, DockPosition, DockSide, InactiveOpacity,
+    ShowIndentGuides, ShowScrollbar, serialize_optional_f32_with_two_decimal_places,
 };
 
 #[with_fallible_options]
@@ -125,6 +124,9 @@ pub struct WorkspaceSettingsContent {
     pub window_decorations: Option<WindowDecorations>,
     /// Background image settings
     pub background_image: Option<BackgroundImage>,
+    /// Whether the focused panel follows the mouse location
+    /// Default: false
+    pub focus_follows_mouse: Option<FocusFollowsMouse>,
 }
 
 #[with_fallible_options]
@@ -930,4 +932,11 @@ impl DocumentSymbols {
     pub fn lsp_enabled(&self) -> bool {
         self == &Self::On
     }
+}
+
+#[with_fallible_options]
+#[derive(Copy, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema, MergeFrom, Debug)]
+pub struct FocusFollowsMouse {
+    pub enabled: Option<bool>,
+    pub debounce_ms: Option<u64>,
 }
