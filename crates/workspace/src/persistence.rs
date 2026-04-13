@@ -1804,16 +1804,12 @@ impl WorkspaceDb {
         }
     }
 
-    async fn all_paths_exist_with_a_directory(
-        paths: &[PathBuf],
-        fs: &dyn Fs,
-        timestamp: Option<DateTime<Utc>>,
-    ) -> bool {
+    async fn all_paths_exist_with_a_directory(paths: &[PathBuf], fs: &dyn Fs) -> bool {
         let mut any_dir = false;
         for path in paths {
             match fs.metadata(path).await.ok().flatten() {
                 None => {
-                    return timestamp.is_some_and(|t| Utc::now() - t < chrono::Duration::days(7));
+                    return false;
                 }
                 Some(meta) => {
                     if meta.is_dir {
@@ -1839,9 +1835,9 @@ impl WorkspaceDb {
         )>,
     > {
         let mut result = Vec::new();
-        let mut delete_tasks = Vec::new();
+        let mut workspaces_to_delete = Vec::new();
         let remote_connections = self.remote_connections()?;
-
+        let now = Utc::now();
         for (id, paths, remote_connection_id, timestamp) in self.recent_workspaces()? {
             if let Some(remote_connection_id) = remote_connection_id {
                 if let Some(connection_options) = remote_connections.get(&remote_connection_id) {
@@ -1852,34 +1848,40 @@ impl WorkspaceDb {
                         timestamp,
                     ));
                 } else {
-                    delete_tasks.push(self.delete_workspace_by_id(id));
+                    workspaces_to_delete.push(id);
                 }
                 continue;
             }
 
-            let has_wsl_path = if cfg!(windows) {
-                paths
+            // Delete the workspace if any of the paths are WSL paths. If a
+            // local workspace points to WSL, attempting to read its metadata
+            // will wait for the WSL VM and file server to boot up. This can
+            // block for many seconds. Supported scenarios use remote
+            // workspaces.
+            if cfg!(windows) {
+                let has_wsl_path = paths
                     .paths()
                     .iter()
-                    .any(|path| util::paths::WslPath::from_path(path).is_some())
-            } else {
-                false
-            };
+                    .any(|path| util::paths::WslPath::from_path(path).is_some());
+                if has_wsl_path {
+                    workspaces_to_delete.push(id);
+                    continue;
+                }
+            }
 
-            // Delete the workspace if any of the paths are WSL paths.
-            // If a local workspace points to WSL, this check will cause us to wait for the
-            // WSL VM and file server to boot up. This can block for many seconds.
-            // Supported scenarios use remote workspaces.
-            if !has_wsl_path
-                && Self::all_paths_exist_with_a_directory(paths.paths(), fs, Some(timestamp)).await
-            {
+            if Self::all_paths_exist_with_a_directory(paths.paths(), fs).await {
                 result.push((id, SerializedWorkspaceLocation::Local, paths, timestamp));
-            } else {
-                delete_tasks.push(self.delete_workspace_by_id(id));
+            } else if now - timestamp >= chrono::Duration::days(7) {
+                workspaces_to_delete.push(id);
             }
         }
 
-        futures::future::join_all(delete_tasks).await;
+        futures::future::join_all(
+            workspaces_to_delete
+                .into_iter()
+                .map(|id| self.delete_workspace_by_id(id)),
+        )
+        .await;
         Ok(result)
     }
 
@@ -1932,7 +1934,7 @@ impl WorkspaceDb {
                     window_id,
                 });
             } else {
-                if Self::all_paths_exist_with_a_directory(paths.paths(), fs, None).await {
+                if Self::all_paths_exist_with_a_directory(paths.paths(), fs).await {
                     workspaces.push(SessionWorkspace {
                         workspace_id,
                         location: SerializedWorkspaceLocation::Local,
@@ -2525,7 +2527,6 @@ mod tests {
 
         cx.update(|cx| {
             cx.set_staff(true);
-            cx.update_flags(true, vec!["agent-v2".to_string()]);
         });
 
         let fs = fs::FakeFs::new(cx.executor());
@@ -2534,6 +2535,10 @@ mod tests {
 
         let (multi_workspace, cx) =
             cx.add_window_view(|window, cx| MultiWorkspace::test_new(project1.clone(), window, cx));
+
+        multi_workspace.update(cx, |mw, cx| {
+            mw.open_sidebar(cx);
+        });
 
         multi_workspace.update_in(cx, |mw, _, cx| {
             mw.set_random_database_id(cx);
@@ -2562,10 +2567,11 @@ mod tests {
              the newly activated workspace's database id"
         );
 
-        // --- Remove the second workspace (index 1) ---
+        // --- Remove the first workspace (index 0, which is not the active one) ---
         multi_workspace.update_in(cx, |mw, window, cx| {
-            let ws = mw.workspaces()[1].clone();
-            mw.remove(&ws, window, cx);
+            let ws = mw.workspaces().nth(0).unwrap().clone();
+            mw.remove([ws], |_, _, _| unreachable!(), window, cx)
+                .detach_and_log_err(cx);
         });
 
         cx.run_until_parked();
@@ -4078,7 +4084,6 @@ mod tests {
 
         cx.update(|cx| {
             cx.set_staff(true);
-            cx.update_flags(true, vec!["agent-v2".to_string()]);
         });
 
         let fs = fs::FakeFs::new(cx.executor());
@@ -4123,7 +4128,6 @@ mod tests {
 
         cx.update(|cx| {
             cx.set_staff(true);
-            cx.update_flags(true, vec!["agent-v2".to_string()]);
         });
 
         let fs = fs::FakeFs::new(cx.executor());
@@ -4180,7 +4184,6 @@ mod tests {
 
         cx.update(|cx| {
             cx.set_staff(true);
-            cx.update_flags(true, vec!["agent-v2".to_string()]);
         });
 
         let fs = fs::FakeFs::new(cx.executor());
@@ -4190,6 +4193,10 @@ mod tests {
 
         let (multi_workspace, cx) =
             cx.add_window_view(|window, cx| MultiWorkspace::test_new(project1.clone(), window, cx));
+
+        multi_workspace.update(cx, |mw, cx| {
+            mw.open_sidebar(cx);
+        });
 
         multi_workspace.update_in(cx, |mw, _, cx| {
             mw.set_random_database_id(cx);
@@ -4205,7 +4212,7 @@ mod tests {
             workspace.update(cx, |ws: &mut crate::Workspace, _cx| {
                 ws.set_database_id(workspace2_db_id)
             });
-            mw.activate(workspace.clone(), window, cx);
+            mw.add(workspace.clone(), window, cx);
         });
 
         // Save a full workspace row to the DB directly.
@@ -4233,8 +4240,9 @@ mod tests {
 
         // Remove workspace at index 1 (the second workspace).
         multi_workspace.update_in(cx, |mw, window, cx| {
-            let ws = mw.workspaces()[1].clone();
-            mw.remove(&ws, window, cx);
+            let ws = mw.workspaces().nth(1).unwrap().clone();
+            mw.remove([ws], |_, _, _| unreachable!(), window, cx)
+                .detach_and_log_err(cx);
         });
 
         cx.run_until_parked();
@@ -4267,7 +4275,6 @@ mod tests {
 
         cx.update(|cx| {
             cx.set_staff(true);
-            cx.update_flags(true, vec!["agent-v2".to_string()]);
         });
 
         let fs = fs::FakeFs::new(cx.executor());
@@ -4288,6 +4295,10 @@ mod tests {
         let (multi_workspace, cx) =
             cx.add_window_view(|window, cx| MultiWorkspace::test_new(project1.clone(), window, cx));
 
+        multi_workspace.update(cx, |mw, cx| {
+            mw.open_sidebar(cx);
+        });
+
         multi_workspace.update_in(cx, |mw, _, cx| {
             mw.workspace().update(cx, |ws, _cx| {
                 ws.set_database_id(ws1_id);
@@ -4299,7 +4310,7 @@ mod tests {
             workspace.update(cx, |ws: &mut crate::Workspace, _cx| {
                 ws.set_database_id(ws2_id)
             });
-            mw.activate(workspace.clone(), window, cx);
+            mw.add(workspace.clone(), window, cx);
         });
 
         let session_id = "test-zombie-session";
@@ -4339,8 +4350,9 @@ mod tests {
 
         // Remove workspace2 (index 1).
         multi_workspace.update_in(cx, |mw, window, cx| {
-            let ws = mw.workspaces()[1].clone();
-            mw.remove(&ws, window, cx);
+            let ws = mw.workspaces().nth(1).unwrap().clone();
+            mw.remove([ws], |_, _, _| unreachable!(), window, cx)
+                .detach_and_log_err(cx);
         });
 
         cx.run_until_parked();
@@ -4369,7 +4381,6 @@ mod tests {
 
         cx.update(|cx| {
             cx.set_staff(true);
-            cx.update_flags(true, vec!["agent-v2".to_string()]);
         });
 
         let fs = fs::FakeFs::new(cx.executor());
@@ -4385,6 +4396,10 @@ mod tests {
         let (multi_workspace, cx) =
             cx.add_window_view(|window, cx| MultiWorkspace::test_new(project1.clone(), window, cx));
 
+        multi_workspace.update(cx, |mw, cx| {
+            mw.open_sidebar(cx);
+        });
+
         multi_workspace.update_in(cx, |mw, _, cx| {
             mw.set_random_database_id(cx);
         });
@@ -4394,7 +4409,7 @@ mod tests {
             workspace.update(cx, |ws: &mut crate::Workspace, _cx| {
                 ws.set_database_id(workspace2_db_id)
             });
-            mw.activate(workspace.clone(), window, cx);
+            mw.add(workspace.clone(), window, cx);
         });
 
         // Save a full workspace row to the DB directly and let it settle.
@@ -4418,8 +4433,9 @@ mod tests {
 
         // Remove workspace2 — this pushes a task to pending_removal_tasks.
         multi_workspace.update_in(cx, |mw, window, cx| {
-            let ws = mw.workspaces()[1].clone();
-            mw.remove(&ws, window, cx);
+            let ws = mw.workspaces().nth(1).unwrap().clone();
+            mw.remove([ws], |_, _, _| unreachable!(), window, cx)
+                .detach_and_log_err(cx);
         });
 
         // Simulate the quit handler pattern: collect flush tasks + pending
@@ -4427,7 +4443,6 @@ mod tests {
         let all_tasks = multi_workspace.update_in(cx, |mw, window, cx| {
             let mut tasks: Vec<Task<()>> = mw
                 .workspaces()
-                .iter()
                 .map(|workspace| {
                     workspace.update(cx, |workspace, cx| {
                         workspace.flush_serialization(window, cx)
@@ -4470,7 +4485,6 @@ mod tests {
 
         cx.update(|cx| {
             cx.set_staff(true);
-            cx.update_flags(true, vec!["agent-v2".to_string()]);
         });
 
         let fs = fs::FakeFs::new(cx.executor());
@@ -4527,7 +4541,6 @@ mod tests {
 
         cx.update(|cx| {
             cx.set_staff(true);
-            cx.update_flags(true, vec!["agent-v2".to_string()]);
         });
 
         let fs = fs::FakeFs::new(cx.executor());
@@ -4687,7 +4700,6 @@ mod tests {
 
         cx.update(|cx| {
             cx.set_staff(true);
-            cx.update_flags(true, vec!["agent-v2".to_string()]);
         });
 
         let fs = fs::FakeFs::new(cx.executor());
@@ -4746,6 +4758,10 @@ mod tests {
         // becomes the active workspace.
         let (multi_workspace, cx) = cx
             .add_window_view(|window, cx| MultiWorkspace::test_new(project_2.clone(), window, cx));
+
+        multi_workspace.update(cx, |mw, cx| {
+            mw.open_sidebar(cx);
+        });
 
         multi_workspace.update_in(cx, |mw, window, cx| {
             mw.test_add_workspace(project_1.clone(), window, cx);
@@ -4839,8 +4855,8 @@ mod tests {
             .map(Into::into)
             .collect();
         let expected_keys = vec![
-            ProjectGroupKey::new(None, PathList::new(&["/other-project"])),
             ProjectGroupKey::new(None, PathList::new(&["/repo"])),
+            ProjectGroupKey::new(None, PathList::new(&["/other-project"])),
         ];
         assert_eq!(
             restored_keys, expected_keys,
@@ -4891,6 +4907,113 @@ mod tests {
             active_paths,
             vec![PathBuf::from("/worktree-feature")],
             "The restored active workspace should be the linked worktree project"
+        );
+    }
+
+    #[gpui::test]
+    async fn test_remove_project_group_falls_back_to_neighbor(cx: &mut gpui::TestAppContext) {
+        crate::tests::init_test(cx);
+        cx.update(|cx| {
+            cx.set_staff(true);
+            cx.update_flags(true, vec!["agent-v2".to_string()]);
+        });
+
+        let fs = fs::FakeFs::new(cx.executor());
+        let dir_a = unique_test_dir(&fs, "group-a").await;
+        let dir_b = unique_test_dir(&fs, "group-b").await;
+        let dir_c = unique_test_dir(&fs, "group-c").await;
+
+        let project_a = Project::test(fs.clone(), [dir_a.as_path()], cx).await;
+        let project_b = Project::test(fs.clone(), [dir_b.as_path()], cx).await;
+        let project_c = Project::test(fs.clone(), [dir_c.as_path()], cx).await;
+
+        // Create a multi-workspace with project A, then add B and C.
+        // project_group_keys stores newest first: [C, B, A].
+        // Sidebar displays in the same order: C (top), B (middle), A (bottom).
+        let (multi_workspace, cx) = cx
+            .add_window_view(|window, cx| MultiWorkspace::test_new(project_a.clone(), window, cx));
+
+        multi_workspace.update(cx, |mw, cx| mw.open_sidebar(cx));
+
+        let workspace_b = multi_workspace.update_in(cx, |mw, window, cx| {
+            mw.test_add_workspace(project_b.clone(), window, cx)
+        });
+        let _workspace_c = multi_workspace.update_in(cx, |mw, window, cx| {
+            mw.test_add_workspace(project_c.clone(), window, cx)
+        });
+        cx.run_until_parked();
+
+        let key_a = project_a.read_with(cx, |p, cx| p.project_group_key(cx));
+        let key_b = project_b.read_with(cx, |p, cx| p.project_group_key(cx));
+        let key_c = project_c.read_with(cx, |p, cx| p.project_group_key(cx));
+
+        // Activate workspace B so removing its group exercises the fallback.
+        multi_workspace.update_in(cx, |mw, window, cx| {
+            mw.activate(workspace_b.clone(), window, cx);
+        });
+        cx.run_until_parked();
+
+        // --- Remove group B (the middle one). ---
+        // In the sidebar [C, B, A], "below" B is A.
+        multi_workspace.update_in(cx, |mw, window, cx| {
+            mw.remove_project_group(&key_b, window, cx)
+                .detach_and_log_err(cx);
+        });
+        cx.run_until_parked();
+
+        let active_paths =
+            multi_workspace.read_with(cx, |mw, cx| mw.workspace().read(cx).root_paths(cx));
+        assert_eq!(
+            active_paths
+                .iter()
+                .map(|p| p.to_path_buf())
+                .collect::<Vec<_>>(),
+            vec![dir_a.clone()],
+            "After removing the middle group, should fall back to the group below (A)"
+        );
+
+        // After removing B, keys = [A, C], sidebar = [C, A].
+        // Activate workspace A (the bottom) so removing it tests the
+        // "fall back upward" path.
+        let workspace_a =
+            multi_workspace.read_with(cx, |mw, _| mw.workspaces().next().cloned().unwrap());
+        multi_workspace.update_in(cx, |mw, window, cx| {
+            mw.activate(workspace_a.clone(), window, cx);
+        });
+        cx.run_until_parked();
+
+        // --- Remove group A (the bottom one in sidebar). ---
+        // Nothing below A, so should fall back upward to C.
+        multi_workspace.update_in(cx, |mw, window, cx| {
+            mw.remove_project_group(&key_a, window, cx)
+                .detach_and_log_err(cx);
+        });
+        cx.run_until_parked();
+
+        let active_paths =
+            multi_workspace.read_with(cx, |mw, cx| mw.workspace().read(cx).root_paths(cx));
+        assert_eq!(
+            active_paths
+                .iter()
+                .map(|p| p.to_path_buf())
+                .collect::<Vec<_>>(),
+            vec![dir_c.clone()],
+            "After removing the bottom group, should fall back to the group above (C)"
+        );
+
+        // --- Remove group C (the only one remaining). ---
+        // Should create an empty workspace.
+        multi_workspace.update_in(cx, |mw, window, cx| {
+            mw.remove_project_group(&key_c, window, cx)
+                .detach_and_log_err(cx);
+        });
+        cx.run_until_parked();
+
+        let active_paths =
+            multi_workspace.read_with(cx, |mw, cx| mw.workspace().read(cx).root_paths(cx));
+        assert!(
+            active_paths.is_empty(),
+            "After removing the only remaining group, should have an empty workspace"
         );
     }
 }
