@@ -14,7 +14,7 @@ mod theme;
 mod title_bar;
 mod workspace;
 
-pub use action::{ActionName, ActionWithArguments};
+pub use action::{ActionName, ActionWithArguments, CommandAliasTarget};
 pub use agent::*;
 pub use background_image::*;
 pub use editor::*;
@@ -523,6 +523,11 @@ pub struct TelemetrySettingsContent {
     ///
     /// Default: true
     pub metrics: Option<bool>,
+    /// Allow sending requests to Anthropic models that cannot be offered with
+    /// Zero Data Retention.
+    ///
+    /// Default: false
+    pub anthropic_retention: Option<bool>,
 }
 
 impl Default for TelemetrySettingsContent {
@@ -530,6 +535,7 @@ impl Default for TelemetrySettingsContent {
         Self {
             diagnostics: Some(true),
             metrics: Some(true),
+            anthropic_retention: Some(false),
         }
     }
 }
@@ -705,7 +711,7 @@ pub struct GitPanelSettingsContent {
     /// Maximum length of the commit message title before a warning is shown.
     /// Set to 0 to disable.
     ///
-    /// Default: 72
+    /// Default: 0
     pub commit_title_max_length: Option<usize>,
 }
 
@@ -1131,6 +1137,16 @@ pub struct RemoteSettingsContent {
     pub dev_container_connections: Option<Vec<DevContainerConnection>>,
     pub read_ssh_config: Option<bool>,
     pub use_podman: Option<bool>,
+    /// Whether to build dev container images with BuildKit.
+    ///
+    /// When unset, Zed auto-detects BuildKit by probing for the `buildx` CLI
+    /// plugin. Set to `false` to force the classic Docker builder, which is
+    /// required for Docker-compatible engines that lack an integrated BuildKit
+    /// (e.g. Apple Container via a Docker-API bridge), where BuildKit builds
+    /// cannot resolve locally-built images.
+    ///
+    /// Default: null (auto-detect)
+    pub dev_container_use_buildkit: Option<bool>,
 }
 
 #[with_fallible_options]
